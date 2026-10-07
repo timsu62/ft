@@ -19,6 +19,8 @@ concurrency:
 jobs:
   test:
     name: Test and build
+    env:
+      RUNTIME__DLTHUB_TELEMETRY: "false"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,6 +60,8 @@ jobs:
     name: Extract Toronto data and publish assets
     permissions:
       contents: write
+    env:
+      RUNTIME__DLTHUB_TELEMETRY: "false"
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
