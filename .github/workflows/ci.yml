@@ -155,7 +155,7 @@ jobs:
 
               for table in sorted(required):
                   count = con.execute(
-                      f"SELECT COUNT(*) FROM {table}"
+                      f"SELECT COUNT(*) FROM raw.{table}"
                   ).fetchone()[0]
 
                   if count == 0:
