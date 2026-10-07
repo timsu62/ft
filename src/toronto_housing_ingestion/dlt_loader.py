@@ -166,7 +166,7 @@ def load_scd2(
             )
 
     return LoadResult(
-        table_name=f"{dataset}.{table_name}",
+        table_name=table_name,
         destination_kind=destination_kind,
         total_rows=total_rows,
         current_rows=current_rows,
