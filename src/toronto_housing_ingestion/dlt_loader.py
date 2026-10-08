@@ -7,6 +7,8 @@ filter is applied only while reading rows for dlt.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -95,6 +97,18 @@ def _iter_snapshot_rows(
             yield row
 
 
+def _row_hash(row: dict[str, Any]) -> str:
+    """Return a stable hash of source attributes, excluding the unstable _id."""
+    tracked = {key: value for key, value in row.items() if key != "_id"}
+    payload = json.dumps(
+        tracked,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def load_scd2(
     *,
     credentials: str,
@@ -127,18 +141,26 @@ def load_scd2(
     @dlt.resource(name=table_name)
     def rows() -> Iterator[dict[str, Any]]:
         """Yield warehouse rows from the complete Parquet snapshot."""
-        yield from _iter_snapshot_rows(
+        for row in _iter_snapshot_rows(
             path, source.warehouse_date_column, source.warehouse_since
-        )
+        ):
+            row["row_hash"] = _row_hash(row)
+            yield row
 
     resource = rows()
     resource.apply_hints(
         primary_key=list(source.primary_key),
-        write_disposition={"disposition": "merge", "strategy": "scd2"},
+        write_disposition={
+            "disposition": "merge",
+            "strategy": "scd2",
+            "row_version_column_name": "row_hash",
+        },
         columns=source.type_hints,
     )
+
     if destination_kind == "duckdb":
         credentials = str((Path(__file__).resolve().parents[2] / credentials).resolve())
+
     pipeline = dlt.pipeline(
         pipeline_name=f"toronto_{source.name}_scd2",
         destination=_destination(destination_kind, credentials),
