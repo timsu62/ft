@@ -64,3 +64,25 @@ def test_load_config_parses_project_yaml(monkeypatch) -> None:
     app = load_config(Path("open_data_config.yml"))
     assert len(app.sources) == 5
     assert app.sources[0].warehouse_since == "2020-01-01"
+
+
+def test_replace_strategy_allows_empty_primary_key(monkeypatch, tmp_path):
+    import toronto_housing_ingestion.config as config_module
+
+    monkeypatch.setattr(config_module.sys, "version_info", (3, 14, 0))
+    monkeypatch.setattr(config_module.sys, "version", "3.14.0")
+
+    raw = yaml.safe_load(Path("open_data_config.yml").read_text())
+    raw["sources"]["development_applications"]["warehouse_strategy"] = "replace"
+    raw["sources"]["development_applications"]["primary_key"] = []
+
+    validate_config(raw)
+
+    config_path = tmp_path / "test_config.yml"
+    config_path.write_text(yaml.safe_dump(raw))
+
+    app = load_config(config_path)
+    source = next(s for s in app.sources if s.name == "development_applications")
+
+    assert source.warehouse_strategy == "replace"
+    assert source.primary_key == ()

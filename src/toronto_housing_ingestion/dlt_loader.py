@@ -1,8 +1,11 @@
-"""Small dlt SCD2 loader for full Parquet snapshots.
+"""Load full Parquet snapshots into the configured dlt warehouse strategy.
 
 Extraction is intentionally separate from warehouse loading. The extracted
 Parquet file keeps the complete source snapshot; the optional warehouse date
 filter is applied only while reading rows for dlt.
+
+The existing Active/Cleared permit resources use SCD2. Supporting resources can
+use full-snapshot replacement by setting ``warehouse_strategy: replace``.
 """
 
 from __future__ import annotations
@@ -117,16 +120,26 @@ def load_scd2(
     dataset_name: str,
     destination_kind: str,
 ) -> LoadResult:
-    """Load one full Parquet snapshot into dlt using SCD2.
+    """Load a full Parquet snapshot using ``source.warehouse_strategy``.
 
-    The complete Parquet snapshot is retained as the raw asset. When the
-    source config has ``warehouse_since`` and ``warehouse_date_column``, only
-    rows on or after that date are sent to the warehouse.
+    The function name is retained so existing ingestion call sites continue to
+    work. For ``scd2``, the configured primary key and row hash maintain history.
+    For ``replace``, the destination table is replaced by the latest snapshot,
+    without applying a dlt primary-key hint.
+
+    If the source config has ``warehouse_since`` and ``warehouse_date_column``,
+    only rows on or after that date are sent to the warehouse.
     """
     destination_kind = destination_kind.lower()
     if not source.warehouse_load:
         raise ValueError(f"{source.name}: warehouse loading is disabled.")
-    if not source.primary_key:
+
+    strategy = source.warehouse_strategy.lower()
+    if strategy not in {"scd2", "replace"}:
+        raise ValueError(
+            f"{source.name}: unsupported warehouse strategy: {strategy!r}."
+        )
+    if strategy == "scd2" and not source.primary_key:
         raise ValueError(f"{source.name}: primary_key is required for SCD2.")
 
     path = Path(snapshot_path)
@@ -144,25 +157,34 @@ def load_scd2(
         for row in _iter_snapshot_rows(
             path, source.warehouse_date_column, source.warehouse_since
         ):
-            row["row_hash"] = _row_hash(row)
+            if strategy == "scd2":
+                row["row_hash"] = _row_hash(row)
             yield row
 
     resource = rows()
-    resource.apply_hints(
-        primary_key=list(source.primary_key),
-        write_disposition={
-            "disposition": "merge",
-            "strategy": "scd2",
-            "row_version_column_name": "row_hash",
-        },
-        columns=source.type_hints,
-    )
+    if strategy == "scd2":
+        resource.apply_hints(
+            primary_key=list(source.primary_key),
+            write_disposition={
+                "disposition": "merge",
+                "strategy": "scd2",
+                "row_version_column_name": "row_hash",
+            },
+            columns=source.type_hints,
+        )
+    else:
+        resource.apply_hints(
+            write_disposition="replace",
+            columns=source.type_hints,
+        )
 
     if destination_kind == "duckdb":
         credentials = str((Path(__file__).resolve().parents[2] / credentials).resolve())
 
     pipeline = dlt.pipeline(
-        pipeline_name=f"toronto_{source.name}_scd2",
+        # Preserve the existing pipeline names for Active/Cleared SCD2. Using
+        # a separate name for replacement avoids reusing a failed SCD2 package.
+        pipeline_name=f"toronto_{source.name}_{strategy}",
         destination=_destination(destination_kind, credentials),
         dataset_name=dataset,
         dev_mode=False,
@@ -181,11 +203,15 @@ def load_scd2(
             total_rows = int(
                 connection.execute(f"SELECT COUNT(*) FROM {qualified}").fetchone()[0]
             )
-            current_rows = int(
-                connection.execute(
-                    f"SELECT COUNT(*) FROM {qualified} WHERE _dlt_valid_to IS NULL"
-                ).fetchone()[0]
-            )
+            if strategy == "scd2":
+                current_rows = int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {qualified} WHERE _dlt_valid_to IS NULL"
+                    ).fetchone()[0]
+                )
+            else:
+                # Replacement tables have no SCD2 current-version semantics.
+                current_rows = total_rows
 
     return LoadResult(
         table_name=table_name,

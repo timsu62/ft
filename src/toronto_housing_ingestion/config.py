@@ -32,6 +32,7 @@ class SourceConfig:
     warehouse_date_column: str | None = None
     min_row_count: int | None = None
     max_row_change_percent: float | None = None
+    warehouse_strategy: str = "scd2"
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,13 @@ def validate_config(raw: dict[str, Any]) -> None:
         if not isinstance(spec["warehouse_load"], bool):
             raise ValueError(f"Source '{name}' warehouse_load must be true or false.")
 
+        strategy = str(spec.get("warehouse_strategy", "scd2")).lower()
+
+        if strategy not in {"scd2", "replace"}:
+            raise ValueError(
+                f"Source '{name}' warehouse_strategy must be 'scd2' or 'replace'."
+            )
+
         for field in ("required_columns", "primary_key"):
             value = spec[field]
             if not isinstance(value, list) or any(
@@ -157,9 +165,13 @@ def validate_config(raw: dict[str, Any]) -> None:
             if not isinstance(warehouse_date_column, str) or not warehouse_date_column:
                 raise ValueError(f"Source '{name}' warehouse_date_column is required.")
 
-        if spec.get("warehouse_load") and not spec["primary_key"]:
+        if (
+            spec.get("warehouse_load")
+            and strategy == "scd2"
+            and not spec["primary_key"]
+        ):
             raise ValueError(
-                f"Source '{name}' needs primary_key when warehouse_load is true."
+                f"Source '{name}' needs primary_key when warehouse_strategy is 'scd2'."
             )
         if spec.get("warehouse_load") and not spec.get("pagination_sort"):
             raise ValueError(
@@ -223,6 +235,7 @@ def load_config(path: Path) -> AppConfig:
                 if spec.get("max_row_change_percent") is not None
                 else None
             ),
+            warehouse_strategy=str(spec.get("warehouse_strategy", "scd2")).lower(),
         )
         for name, spec in raw["sources"].items()
     )
